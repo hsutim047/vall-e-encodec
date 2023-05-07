@@ -7,7 +7,7 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments
 )
-from nar_bart import NARBartForConditionalGeneration
+from encodec_model.nar_bart_model import NARBartForConditionalGeneration
 
 
 name = 'libri960_nar_wr0.08_lr1e-4'
@@ -22,9 +22,9 @@ model = NARBartForConditionalGeneration.from_pretrained("voidful/bart-base-unit"
 # Set training parameters
 training_args = Seq2SeqTrainingArguments(
     output_dir="./training_output",
-    num_train_epochs=10,
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
+    num_train_epochs=2,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
     warmup_ratio=0.08,
     weight_decay=1e-4,
     logging_dir="./logs",
@@ -34,8 +34,7 @@ training_args = Seq2SeqTrainingArguments(
     evaluation_strategy="steps",
     eval_steps=10000,
     fp16=True,
-    gradient_accumulation_steps=8,
-    #eval_accumulation_steps=8,
+    gradient_accumulation_steps=2,
     learning_rate=1e-4,
 )
 
