@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 
 import torch
 from datasets import load_dataset
@@ -57,12 +58,26 @@ def get_args():
         type=str,
         default="cuda"
     )
+    parser.add_argument(
+        "--num_beams",
+        type=int,
+        default=5
+    )
+    parser.add_argument(
+        "--top_k",
+        type=int,
+        default=50
+    )
+    parser.add_argument(
+        "--force_write",
+        action="store_true"
+    )
     
     args = parser.parse_args()
     return args
 
 
-def inference_ar(ar_model, ar_tokenizer, dataset, device, batch=1):
+def inference_ar(ar_model, ar_tokenizer, dataset, device, batch=1, num_beams=5, top_k=50):
     decoder_outputs = {}
     force_words_ids = ar_tokenizer([f"v_tok_{u}" for u in range(1024)], 
                                   add_special_tokens=True).input_ids
@@ -70,8 +85,8 @@ def inference_ar(ar_model, ar_tokenizer, dataset, device, batch=1):
         file_id = dataset['id'][i]
         inputs = ar_tokenizer(dataset['text'][i], padding='max_length', truncation=True,
                               max_length=1024, return_tensors="pt").to(device)
-        output_ids = ar_model.generate(input_ids=inputs['input_ids'], num_beams=1, do_sample=False,
-                                       max_length=1024)#, force_words_ids=force_words_ids)
+        output_ids = ar_model.generate(input_ids=inputs['input_ids'], num_beams=num_beams,
+                                       top_k=top_k, max_length=1024)#, force_words_ids=force_words_ids)
         decode_output = ar_tokenizer.decode(output_ids[0], skip_special_tokens=True)
         decoder_outputs[file_id] = [int(token.strip(' ')) for token in decode_output.split('v_tok_')[1:]]
     return decoder_outputs
@@ -172,6 +187,9 @@ def write_decoder_output_ids(ar_outputs, nar_outputs, result_json):
 
 
 def main(args):
+    if not args.force_write and os.path.isfile(args.result_json):
+        exit(0)
+
     device = args.device
     
     # dataset
@@ -191,7 +209,8 @@ def main(args):
         if args.use_ar_model:
             ar_model = eval(args.ar_model).from_pretrained(args.ar_model_ckpt).to(device)
             ar_tokenizer = AutoTokenizer.from_pretrained(args.ar_model_ckpt)
-            ar_decoder_output_ids = inference_ar(ar_model, ar_tokenizer, dataset, device)
+            ar_decoder_output_ids = inference_ar(ar_model, ar_tokenizer, dataset,
+                                                 device, args.num_beams, args.top_k)
         else:
             ar_decoder_output_ids = {
                 dataset['id'][i]: dataset['encodec_0'][i]
