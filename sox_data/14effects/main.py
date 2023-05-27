@@ -1,8 +1,9 @@
 import argparse
-import os
-import json
-from query import generate_messages, query, handle_query
 import csv
+import json
+import os
+
+from query import generate_messages, handle_query
 from utils import join_lists, parse_sox_instruction
 
 

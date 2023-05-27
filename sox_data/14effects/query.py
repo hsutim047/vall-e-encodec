@@ -1,8 +1,8 @@
-import openai
 import json
-import argparse
-from tqdm import tqdm
 import os
+
+import openai
+from tqdm import tqdm
 
 
 def generate_messages(system_message, single_prompt):
@@ -49,24 +49,3 @@ def handle_query(messages, model, n, temp, result_path):
     with open(result_path, 'w+') as f:
         json.dump(result, f, indent=4)
     return response
-
-
-def main(args):
-    prompt_file = args.prompt_file
-    model = args.model
-    n = args.n
-    temp = args.temp
-    reponse_root = args.response_root
-    os.makedirs(reponse_root, exist_ok=True)
-    
-    all_messages = get_all_messages(prompt_file)
-    for idx, messages in tqdm(enumerate(all_messages)):
-        result_path = os.path.join(reponse_root, f'{idx}.json')
-        if os.path.isfile(result_path):
-            continue
-        _ = handle_query(messages, model, n, temp, result_path)
-
-
-if __name__ == '__main__':
-    args = None
-    main(args)
