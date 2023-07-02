@@ -47,24 +47,34 @@ def get_attention_mask(seq_length, max_length):
     return [1] * seq_length + [0] * (max_length - seq_length)
 
 
-def pack_inputs(tokenizer, instruction_ids, transcription_ids, encodec_ids, max_length):
+def pad_sequences(sequences, max_length, padding_value):
+    return [sequence + [padding_value] * (max_length - len(sequence)) for sequence in sequences]
+
+
+def pack_inputs(tokenizer, instruction_ids_list, transcription_ids_list, encodec_ids_list, max_length):
     bos_token_id = tokenizer.bos_token_id
     eos_token_id = tokenizer.eos_token_id
     sep_token_id = tokenizer.sep_token_id
     pad_token_id = tokenizer.pad_token_id
 
     input_ids = []
-    attention_mask = []
+    attention_masks = []
     
-    encoder_input_ids = [bos_token_id] + \
-        instruction_ids + [sep_token_id] + \
-        transcription_ids + [sep_token_id] + \
-        encodec_ids + [eos_token_id]
-    
-    input_ids.append(encoder_input_ids)
+    for instruction_ids, transcription_ids, encodec_ids in \
+        zip(instruction_ids_list, transcription_ids_list, encodec_ids_list):
+        encoder_input_ids = [bos_token_id] + \
+            instruction_ids + [sep_token_id] + \
+            transcription_ids + [sep_token_id] + \
+            encodec_ids + [eos_token_id]
+        
+        input_ids.append(encoder_input_ids)
+        
+    attention_masks = [get_attention_mask(encoder_input_ids, max_length) for encoder_input_ids in input_ids]
+    input_ids = pad_sequences(input_ids, max_length, pad_token_id)
     
     inputs = BatchEncoding(tensor_type="pt")
     inputs["input_ids"] = torch.tensor(input_ids)
+    inputs["attention_mask"] = torch.tensor(attention_masks)
 
     return inputs
 
@@ -86,12 +96,12 @@ def ground_truth_only(tokenizer, dataset, device):
 def cascade_ar_nar(ar_model, nar_model, ar_tokenizer, nar_tokenizer, dataset, device):
     layer_list = []
 
-    instruction_ids = ar_tokenizer(dataset["instruction"][0])["input_ids"][1 : -1]
-    transcription_ids = ar_tokenizer(dataset["transcription"][0])["input_ids"][1 : -1]
+    instruction_ids = ar_tokenizer(dataset["instruction"])["input_ids"][:, 1:-1]
+    transcription_ids = ar_tokenizer(dataset["transcription"])["input_ids"][:, 1:-1]
     
     # Get AR prediction
     src_encodec_ids = ar_tokenizer.convert_tokens_to_ids(
-        [f"v_tok_{u}" for u in dataset[f"src_encodec_0"][0]])
+        [[f"v_tok_{u}" for u in src] for src in dataset["src_encodec_0"]])
     inputs = pack_inputs(ar_tokenizer, instruction_ids, transcription_ids, src_encodec_ids, 1023)
     inputs = inputs.to(device)
     bad_words_ids = [[ar_tokenizer.convert_tokens_to_ids(f"v_tok_{i}")] for i in range(1024, 1024*8)]
@@ -103,7 +113,7 @@ def cascade_ar_nar(ar_model, nar_model, ar_tokenizer, nar_tokenizer, dataset, de
     # Encoder input: instruction + transcription + curr_src_encodec_inputs
     for layer in range(1, 8):
         curr_src_encodec_ids = nar_tokenizer.convert_tokens_to_ids(
-        [f"v_tok_{u + layer * 1024}" for u in dataset[f"src_encodec_{layer}"][0]])
+            [[f"v_tok_{u + layer * 1024}" for u in src] for src in dataset[f"src_encodec_{layer}"]])
         inputs = pack_inputs(nar_tokenizer, instruction_ids, transcription_ids, curr_src_encodec_ids, 1023)
         inputs = inputs.to(device)
         layer_list.append(nar_decode(nar_model, nar_tokenizer, inputs, layer_list[-1], layer))
@@ -136,13 +146,20 @@ def nar_model_only(model, tokenizer, dataset, device):
     return layer_list
 
 
-def convert_to_encode_code(tokenizer, layer_list):
-    encodec_code = []
-    for layer, layer_ids in enumerate(tokenizer.batch_decode(torch.cat(layer_list))):
-        layer_ids = layer_ids.replace("</s>", "")
-        encodec_code.append([int(i) - layer * 1024 for i in layer_ids.split("v_tok_") if len(i) > 0])
+def convert_to_encode_code(tokenizer, layer_lists):
+    batch_size = layer_lists[0].shape[0]
+    
+    encodec_codes = []
+    for i in range(batch_size):
+        layer_list = [layer_lists[l][i, :] for l in range(len(layer_lists))]
+        encodec_code = []
+        for layer, layer_ids in enumerate(tokenizer.batch_decode(torch.cat(layer_list))):
+            layer_ids = layer_ids.replace("</s>", "")
+            encodec_code.append([int(i) - layer * 1024 for i in layer_ids.split("v_tok_") if len(i) > 0])
 
-    return encodec_code
+        encodec_codes.append(encodec_code)
+
+    return encodec_codes
 
         
 def synthesize_audio(encodec_code, device):
@@ -150,11 +167,14 @@ def synthesize_audio(encodec_code, device):
     model.set_target_bandwidth(6.0)
     model.to(device)
 
-    encodec_input = torch.tensor(encodec_code).unsqueeze(0)
-    encodec_input = encodec_input.to(device)
-    audio = model.decode([(encodec_input, None)]).cpu().detach().numpy()[0]
+    audios = []
+    encodec_inputs = torch.tensor(encodec_code)
+    for encodec_input in encodec_inputs:
+        encodec_input = encodec_input.to(device)
+        audio = model.decode([(encodec_input, None)]).cpu().detach().numpy()[0]
+        audios.append(audio)
 
-    return audio
+    return audios
     
 
 def main(args):
@@ -183,9 +203,10 @@ def main(args):
         nar_model.to(device)
 
         layer_list = cascade_ar_nar(ar_model, nar_model, ar_tokenizer, nar_tokenizer, dataset, device)
-        encodec_code = convert_to_encode_code(nar_tokenizer, layer_list)    
-        audio = synthesize_audio(encodec_code, device)
-        sf.write(args.cascade_output_path, np.ravel(audio), samplerate=24000)
+        encodec_codes = convert_to_encode_code(nar_tokenizer, layer_list)    
+        audios = synthesize_audio(encodec_codes, device)
+        for i, audio in enumerate(audios):
+            sf.write(args.cascade_output_path + f'_{i}.wav', np.ravel(audio), samplerate=24000)
             
     if args.nar_model_only:
         nar_tokenizer = AutoTokenizer.from_pretrained(args.nar_checkpoint)
@@ -212,7 +233,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--nar_checkpoint", type=str, default="../previous_ckpt/vc_nar/checkpoint-70000/")
 
     parser.add_argument("--ground_truth_output_path", type=str, default="output_wav/vc/ground_truth/train_1.wav")
-    parser.add_argument("--cascade_output_path", type=str, default="output_wav/vc/ar_nar_cascade/train_1.wav")
+    parser.add_argument("--cascade_output_path", type=str, default="output_wav/vc/ar_nar_cascade/train")
     parser.add_argument("--nar_output_path", type=str, default="output_wav/vc/nar/train_1.wav")
     
     parser.add_argument("--seed", type=int, default=0)
