@@ -57,8 +57,10 @@ def pack_inputs(tokenizer, instruction_ids_list, transcription_ids_list, encodec
     sep_token_id = tokenizer.sep_token_id
     pad_token_id = tokenizer.pad_token_id
 
-    input_ids = []
+    input_ids_list = []
     attention_masks = []
+    decoder_input_ids_list = []
+    labels = []
     
     for instruction_ids, transcription_ids, encodec_ids in \
         zip(instruction_ids_list, transcription_ids_list, encodec_ids_list):
@@ -66,15 +68,22 @@ def pack_inputs(tokenizer, instruction_ids_list, transcription_ids_list, encodec
             instruction_ids + [sep_token_id] + \
             transcription_ids + [sep_token_id] + \
             encodec_ids + [eos_token_id]
+        input_ids_list.append(encoder_input_ids)
+        decoder_input_ids_list.append([bos_token_id] + encodec_ids)
+        labels.append(encodec_ids + [eos_token_id])
         
-        input_ids.append(encoder_input_ids)
-        
-    attention_masks = [get_attention_mask(encoder_input_ids, max_length) for encoder_input_ids in input_ids]
-    input_ids = pad_sequences(input_ids, max_length, pad_token_id)
-    
+    attention_masks = [get_attention_mask(encoder_input_ids, max_length)
+                       for encoder_input_ids in input_ids_list]
+    input_ids_list = pad_sequences(input_ids_list, max_length, pad_token_id)
+    decoder_attention_masks = [get_attention_mask(decoder_input_ids, max_length)
+                               for decoder_input_ids in decoder_input_ids_list]
+    decoder_input_ids_list = pad_sequences(decoder_input_ids_list, max_length, pad_token_id)
+
     inputs = BatchEncoding(tensor_type="pt")
-    inputs["input_ids"] = torch.tensor(input_ids)
+    inputs["input_ids"] = torch.tensor(input_ids_list)
     inputs["attention_mask"] = torch.tensor(attention_masks)
+    inputs["decoder_input_ids"] = torch.tensor(decoder_input_ids_list)
+    inputs["decoder_attention_mask"] = torch.tensor(decoder_attention_masks)
 
     return inputs
 
@@ -183,7 +192,7 @@ def main(args):
     
     dataset = load_dataset(args.dataset, split="+".join(args.splits))
     dataset = dataset.filter(lambda x : len(x[f"src_encodec_0"]) <= 700)
-    dataset = dataset.shuffle(args.seed).select(range(1))
+    dataset = dataset.shuffle(args.seed).select(range(5))
     
     if args.ground_truth_only:
         tokenizer = AutoTokenizer.from_pretrained(args.ground_truth_model_name)
