@@ -1,14 +1,15 @@
+import os
+import random
 from argparse import ArgumentParser
 
 import torch
 import wandb
 from datasets import load_dataset
-from encodec_bart_se_model import BartEncodecForConditionalGeneration
 from jiwer import wer
 from transformers import (AutoTokenizer, Seq2SeqTrainer,
                           Seq2SeqTrainingArguments)
-import os
-import random
+
+from encodec_bart_se_model import BartEncodecForConditionalGeneration
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 

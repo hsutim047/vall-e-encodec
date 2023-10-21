@@ -1,7 +1,7 @@
 # TODO: change to bart for our case
 import copy
 
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoModel, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("google/long-t5-tglobal-base")
 pretrained = AutoModel.from_pretrained("google/long-t5-tglobal-base")
