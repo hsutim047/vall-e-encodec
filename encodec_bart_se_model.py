@@ -74,26 +74,18 @@ class BartEncodecDecoder(BartPretrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    def _prepare_decoder_attention_mask(self, attention_mask, type_condition_tensor, input_shape, inputs_embeds,
-                                        past_key_values_length):
+    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
         if input_shape[-1] > 1:
-            combined_attention_mask = _make_causal_mask(
+            # Modified: change  _make_causal_mask() to _make_nar_mask()
+            combined_attention_mask = _make_nar_mask(
                 input_shape,
                 inputs_embeds.dtype,
                 device=inputs_embeds.device,
                 past_key_values_length=past_key_values_length,
             )
-            expanded_attn_mask = _make_nar_mask(
-                input_shape,
-                inputs_embeds.dtype,
-                device=inputs_embeds.device,
-                past_key_values_length=past_key_values_length,
-            )
-            combined_attention_mask = torch.where(type_condition_tensor, combined_attention_mask, expanded_attn_mask)
-
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
             expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]).to(
@@ -133,7 +125,7 @@ class BartEncodecDecoder(BartPretrainedModel):
         elif input_ids is not None:
             input = input_ids
             input_shape = input.shape
-            input_ids = input_ids.view(-1, input_shape[-1])
+            # input_ids = input_ids.view(-1, input_shape[-1])
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
             input = inputs_embeds[:, :, -1]
@@ -144,24 +136,24 @@ class BartEncodecDecoder(BartPretrainedModel):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if inputs_embeds is None:
-            # input_shape: (bsz, l, seq_len)
-            n_level = input_shape[1]
-            input_ids = input_ids.view(-1, n_level, input_shape[-1])
-            inputs_embeds = []
-            for i in range(n_level):
-                inputs_embed = self.embed_tokens(input_ids[:, i, :]) * self.embed_scale
-                inputs_embeds.append(inputs_embed)
-            inputs_embeds = torch.sum(inputs_embeds, dim=0)
+            # input_shape: (bsz, 7, seq_len)
+            n_level = 0
+            for l in range(7):
+                if input_ids[0][l][0] != self.config.pad_token_id:
+                    n_level = l + 1
+                else:
+                    break
+            assert n_level > 0, f"{n_level}, {self.config.pad_token_id}"
+            inputs_embeds = [
+                self.embed_tokens(input_ids[:, i, :]) * self.embed_scale
+                for i in range(n_level)
+            ]
+            inputs_embeds = torch.stack(inputs_embeds, dim=0).sum(dim=0)
+            input_shape = inputs_embeds.size()[:-1]
             # NAR id is not needed since tokens are processed as 1024 * l + u
 
-        if input_ids.shape[1] == 1:
-            type_condition_tensor = torch.tensor([True]). \
-                unsqueeze(1).unsqueeze(2).unsqueeze(3)
-        else:
-            type_condition_tensor = (input_ids[:, 0] == self.config.decoder_start_token_id). \
-                unsqueeze(1).unsqueeze(2).unsqueeze(3)
         attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, type_condition_tensor, input_shape, inputs_embeds, past_key_values_length
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
         )
 
         # expand encoder attention mask
@@ -170,7 +162,7 @@ class BartEncodecDecoder(BartPretrainedModel):
             encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
 
         # embed positions
-        positions = self.embed_positions(inputs_embeds.size()[:2], past_key_values_length)
+        positions = self.embed_positions(inputs_embeds[:, :, -1], past_key_values_length)
         positions = positions.to(inputs_embeds.device)
 
         hidden_states = inputs_embeds + positions
