@@ -3,17 +3,15 @@ import random
 from typing import List, Optional, Tuple, Union
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import (BartConfig, BartForConditionalGeneration,
                           BartPretrainedModel)
-from transformers.modeling_outputs import (
-    BaseModelOutput, BaseModelOutputWithPastAndCrossAttentions,
+from transformers.modeling_outputs import (BaseModelOutputWithPastAndCrossAttentions,
     Seq2SeqLMOutput)
 from transformers.models.bart.modeling_bart import (
-    BartDecoderLayer, BartEncoder, BartEncoderLayer,
-    BartLearnedPositionalEmbedding, BartModel, _expand_mask, _make_causal_mask,
+    BartDecoderLayer, BartEncoder,
+    BartLearnedPositionalEmbedding, BartModel, _expand_mask,
     shift_tokens_right)
 from transformers.utils import logging
 
