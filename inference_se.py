@@ -25,7 +25,7 @@ def set_seed(seed):
 def nar_decode(model, tokenizer, inputs, batch_code, layer=0):
     base_input = inputs
     batch_code = torch.stack(batch_code, dim=0).permute(1, 0, 2)
-    pad_widths = [(0, 0), (0, 7 - batch_code.shape[1]), (0, 0)]
+    pad_widths = (0, 0, 0, 7 - batch_code.shape[1], 0, 0)
     batch_code = torch.nn.functional.pad(batch_code, pad_widths, 'constant', value=tokenizer.pad_token_id)
     base_input["decoder_input_ids"] = batch_code
     decode_nar = model.forward(**base_input).logits
