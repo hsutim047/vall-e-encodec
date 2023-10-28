@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 
 import torch
 import wandb
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset, load_from_disk, concatenate_datasets
 from jiwer import wer
 from transformers import (AutoTokenizer, Seq2SeqTrainer,
                           Seq2SeqTrainingArguments)
@@ -13,7 +13,7 @@ from encodec_bart_se_model import BartEncodecForConditionalGeneration
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-name = "speech-chatgpt-base-nar-se"
+name = "speech-chatgpt-base-nar-se_gptspeech+amazon+google+tencent"
 wandb.init(project="text_guided_vc", entity="ntu-gura", name=name)
 wandb.run.log_code(".")
 
@@ -138,36 +138,34 @@ def get_len(l):
     return ""
 
 
-def get_dataset(tokenizer, args):
-    if os.path.isdir(args.train_dataset):
-        train_dataset = load_from_disk(args.train_dataset)
-        eval_dataset = load_from_disk(args.eval_dataset)
-        return train_dataset, eval_dataset
+def get_dataset(tokenizer, args, split='train'):
+    dataset_save_path = eval(f"args.{split}_dataset")
+    if os.path.isdir(dataset_save_path) and not args.force_map:
+        dataset = load_from_disk(dataset_save_path)
+        return dataset
 
-    train_dataset = load_dataset(args.dataset, 'train', split='+'.join(args.train_splits))
-    eval_dataset = load_dataset(args.dataset, 'eval', split='+'.join(args.eval_splits))
+    datasets = []
+    splits = eval(f"args.{split}_splits")
+    for dataset in args.datasets:
+        dataset = load_dataset(dataset, split, split='+'.join(splits))
+        if 'wav_id' in dataset.column_names:
+            dataset = dataset.remove_columns(['wav_id'])
+        datasets.append(dataset)
+    
+    concatenated_dataset = concatenate_datasets(datasets).shuffle(seed=42)
 
-    train_dataset = train_dataset.map(
+    concatenated_dataset = concatenated_dataset.map(
         process_data_to_model_inputs,
-        remove_columns=train_dataset.column_names,
+        remove_columns=concatenated_dataset.column_names,
         batched=True,
         batch_size=TRAIN_ARGS.per_device_train_batch_size,
         fn_kwargs={"tokenizer": tokenizer},
-        num_proc=32
-    )
-    eval_dataset = eval_dataset.map(
-        process_data_to_model_inputs,
-        remove_columns=eval_dataset.column_names,
-        batched=True,
-        batch_size=TRAIN_ARGS.per_device_eval_batch_size,
-        fn_kwargs={"tokenizer": tokenizer},
-        num_proc=32
+        num_proc=8
     )
     
-    train_dataset.save_to_disk(args.train_dataset)
-    eval_dataset.save_to_disk(args.eval_dataset)
+    concatenated_dataset.save_to_disk(dataset_save_path)
 
-    return train_dataset, eval_dataset
+    return concatenated_dataset
 
 
 def preprocess_logits_for_metrics(ret, labels):
@@ -190,7 +188,7 @@ def compute_metrics(eval_pred, tokenizer):
 
     print("pred_result")
     print("=================================")
-    for i in range(10):
+    for i in range(1):
         print("target:", labels[i])
         print("pred:", predictions[i])
         print("-----------------")
@@ -204,8 +202,9 @@ def main(args):
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name) 
     
-    train_dataset, eval_dataset = get_dataset(tokenizer, args)
-    
+    train_dataset = get_dataset(tokenizer, args, 'train')
+    eval_dataset = get_dataset(tokenizer, args, 'eval')
+
     trainer = Seq2SeqTrainer(
         model=model,
         args=TRAIN_ARGS,
@@ -221,18 +220,21 @@ def main(args):
 
 def get_args():
     parser = ArgumentParser()
-    parser.add_argument('-d', '--dataset', type=str, default='lca0503/GPTspeech_encodec_v2')
+    parser.add_argument('-d', '--datasets', type=str, nargs='+',
+                        default=['lca0503/GPTspeech_encodec_v2', 'kuanhuggingface/amazon_tts_encodec',
+                                 'kuanhuggingface/google_tts_encodec', 'kuanhuggingface/tencent_tts_encodec'])
     parser.add_argument('-t', '--train_splits', type=str, nargs='+',
                         default=['train'])
     parser.add_argument('-e', '--eval_splits', type=str, nargs='+',
                         default=['validation'])
     parser.add_argument('-td', '--train_dataset', type=str,
-                        default=f"/mnt/data/{name}/train_dataset")
+                        default=f"/mnt/data/kuanyi/.cache/huggingface/disk/{name}/train_dataset")
     parser.add_argument('-ed', '--eval_dataset', type=str,
-                        default=f"/mnt/data/{name}/eval_dataset")
-    parser.add_argument('-m', '--model_name', type=str, default='lca0503/encodec-tts-nar')
+                        default=f"/mnt/data/kuanyi/.cache/huggingface/disk/{name}/eval_dataset")
+    parser.add_argument('-f', '--force_map', action='store_true')
+    parser.add_argument('-m', '--model_name', type=str, default='voidful/bart-base-unit')
 
-    args = parser.parse_args()    
+    args = parser.parse_args()
     return args
 
 
